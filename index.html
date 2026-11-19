@@ -31,6 +31,8 @@
   }
   button:disabled { opacity: .7; cursor: progress; }
   .hata { min-height: 20px; margin-top: 12px; font-size: 14px; color: #be123c; text-align: center; }
+  .durum { margin: 4px 0 0; font-size: 12px; color: #94a3b8; text-align: center; }
+  .durum:empty { display: none; }
   @media (prefers-color-scheme: dark) {
     .kart { background: #0f172a; color: #f1f5f9; }
     .logo { background: rgba(75, 86, 184, .2); color: #dde1f6; }
@@ -54,6 +56,7 @@
   <label class="hatirla"><input id="hatirla" type="checkbox" checked> Bu cihazda hatırla</label>
   <button id="ac" type="submit">Aç</button>
   <div class="hata" id="hata" role="alert"></div>
+  <p class="durum" id="durum" aria-live="polite"></p>
 </form>
 <script>
 // Masaüstü uygulaması src/yayin/sifre.mjs ile şifreler; burada aynı adımlar tersine çalışır.
@@ -89,19 +92,40 @@
     document.close();
   }
 
-  const kayitli = () => { try { return JSON.parse(localStorage.getItem(ANAHTAR)); } catch { return null; } };
+  // "Bu cihazda hatırla" neden çalışmadı? Kilit ekranının altında kısa bir not olarak gösterilir.
+  const durum = (t) => { $('durum').textContent = t; };
 
-  // Hatırlanan anahtar varsa şifre sormadan aç (şifre değiştiyse anahtar silinir)
-  (async () => {
-    const k = kayitli();
-    if (!k) return;
+  // Tarayıcı bu siteye kalıcı kayıt izni veriyor mu? (gizli pencere / gizlilik ayarları engelleyebilir)
+  function depoCalisiyor() {
     try {
-      const p = await paketAl();
-      if (k.salt !== p.salt) throw 0;
-      goster(await coz(b64(k.bits), p));
-    } catch {
-      try { localStorage.removeItem(ANAHTAR); } catch {}
+      localStorage.setItem('kilit.deneme', '1');
+      const ok = localStorage.getItem('kilit.deneme') === '1';
+      localStorage.removeItem('kilit.deneme');
+      return ok;
+    } catch { return false; }
+  }
+
+  function kayitli() {
+    try { return JSON.parse(localStorage.getItem(ANAHTAR)); } catch { return null; }
+  }
+  const sil = () => { try { localStorage.removeItem(ANAHTAR); } catch {} };
+
+  // Hatırlanan anahtar varsa şifre sormadan aç.
+  // Anahtar yalnızca gerçekten geçersizse silinir; bağlantı hatasında silinmez (bir sonraki açılışta yine dener).
+  (async () => {
+    if (!depoCalisiyor()) {
+      durum('Not: Tarayıcı bu siteye kayıt yapmaya izin vermiyor, bu yüzden "hatırla" çalışmaz (gizli pencere ya da tarayıcının gizlilik ayarı).');
+      return;
     }
+    const k = kayitli();
+    if (!k) { durum('Bu cihazda hatırlanan şifre yok.'); return; }
+    durum('Hatırlanan şifreyle açılıyor…');
+    let p;
+    try { p = await paketAl(); } catch (err) { durum('Veri alınamadı, şifreyi yazarak dene. (' + err.message + ')'); return; }
+    if (k.salt !== p.salt) { sil(); durum('Şifre değiştirildiği için hatırlanan eski şifre silindi.'); return; }
+    let html;
+    try { html = await coz(b64(k.bits), p); } catch { sil(); durum('Hatırlanan şifre geçersizdi, silindi.'); return; }
+    goster(html);
   })();
 
   $('form').addEventListener('submit', async (e) => {
@@ -113,9 +137,15 @@
       const bitler = await anahtarBitleri($('sifre').value, p);
       let html;
       try { html = await coz(bitler, p); } catch { throw new Error('Şifre yanlış'); }
-      try {
-        if ($('hatirla').checked) localStorage.setItem(ANAHTAR, JSON.stringify({ salt: p.salt, bits: toB64(bitler) }));
-      } catch {}
+      if ($('hatirla').checked) {
+        try {
+          localStorage.setItem(ANAHTAR, JSON.stringify({ salt: p.salt, bits: toB64(bitler) }));
+        } catch {
+          // Kaydedilemediyse sessizce geçme: kullanıcı neden tekrar sorulduğunu bilsin
+          $('hata').textContent = 'Açıldı ama tarayıcı şifreyi hatırlamaya izin vermedi.';
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+      }
       goster(html);
     } catch (err) {
       $('hata').textContent = err.message || 'Açılamadı';
