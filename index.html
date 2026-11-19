@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#141836">
+<title>KPSS İlan Takip</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px;
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #0f172a;
+    background: radial-gradient(1200px 600px at 20% -10%, #4b56b8 0%, transparent 60%), linear-gradient(160deg, #141836, #1e2453 55%, #2c3478);
+  }
+  .kart { width: 100%; max-width: 360px; background: #fff; border-radius: 24px; padding: 28px 24px 24px; box-shadow: 0 30px 80px rgba(10, 12, 40, .45); }
+  .logo { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: #eef0fb; color: #3a4499; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 20px; letter-spacing: -.01em; }
+  p.alt { margin: 4px 0 20px; color: #64748b; font-size: 14px; }
+  input[type=password] {
+    width: 100%; font: inherit; font-size: 16px; padding: 12px 14px; border-radius: 12px; border: 1px solid #cbd5e1; outline: none; background: #f8fafc;
+  }
+  input[type=password]:focus { border-color: #4b56b8; box-shadow: 0 0 0 3px rgba(75, 86, 184, .2); background: #fff; }
+  label.hatirla { display: flex; align-items: center; gap: 8px; margin: 14px 0 18px; font-size: 14px; color: #334155; cursor: pointer; }
+  label.hatirla input { width: 18px; height: 18px; accent-color: #3a4499; }
+  button {
+    width: 100%; font: inherit; font-weight: 600; padding: 12px; border: 0; border-radius: 12px; color: #fff; cursor: pointer;
+    background: linear-gradient(135deg, #3a4499, #2c3478); box-shadow: 0 8px 20px rgba(44, 52, 120, .35);
+  }
+  button:disabled { opacity: .7; cursor: progress; }
+  .hata { min-height: 20px; margin-top: 12px; font-size: 14px; color: #be123c; text-align: center; }
+  @media (prefers-color-scheme: dark) {
+    .kart { background: #0f172a; color: #f1f5f9; }
+    .logo { background: rgba(75, 86, 184, .2); color: #dde1f6; }
+    p.alt { color: #94a3b8; }
+    input[type=password] { background: #020617; border-color: #334155; color: #f1f5f9; }
+    input[type=password]:focus { background: #020617; }
+    label.hatirla { color: #cbd5e1; }
+    .hata { color: #fda4af; }
+  }
+</style>
+</head>
+<body>
+<form class="kart" id="form" autocomplete="on">
+  <div class="logo" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+  </div>
+  <h1>KPSS İlan Takip</h1>
+  <p class="alt">Devam etmek için şifreni gir.</p>
+  <input type="text" name="username" value="kpss" autocomplete="username" hidden>
+  <input id="sifre" type="password" placeholder="Şifre" autocomplete="current-password" required autofocus>
+  <label class="hatirla"><input id="hatirla" type="checkbox" checked> Bu cihazda hatırla</label>
+  <button id="ac" type="submit">Aç</button>
+  <div class="hata" id="hata" role="alert"></div>
+</form>
+<script>
+// Masaüstü uygulaması src/yayin/sifre.mjs ile şifreler; burada aynı adımlar tersine çalışır.
+(() => {
+  const ANAHTAR = 'kilit.anahtar';
+  const $ = (id) => document.getElementById(id);
+  const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const toB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  let paket;
+
+  const paketAl = async () => {
+    if (paket) return paket;
+    const r = await fetch('paket.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error('Veri dosyası alınamadı (' + r.status + ')');
+    return (paket = await r.json());
+  };
+
+  async function anahtarBitleri(sifre, p) {
+    const ham = await crypto.subtle.importKey('raw', new TextEncoder().encode(sifre), 'PBKDF2', false, ['deriveBits']);
+    return crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: b64(p.salt), iterations: p.iter }, ham, 256);
+  }
+
+  // Yanlış anahtarda AES-GCM hata fırlatır (içerik doğrulanamaz)
+  async function coz(bitler, p) {
+    const key = await crypto.subtle.importKey('raw', bitler, 'AES-GCM', false, ['decrypt']);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(p.iv) }, key, b64(p.ct));
+    return new TextDecoder().decode(pt);
+  }
+
+  function goster(html) {
+    document.open();
+    document.write(html);
+    document.close();
+  }
+
+  const kayitli = () => { try { return JSON.parse(localStorage.getItem(ANAHTAR)); } catch { return null; } };
+
+  // Hatırlanan anahtar varsa şifre sormadan aç (şifre değiştiyse anahtar silinir)
+  (async () => {
+    const k = kayitli();
+    if (!k) return;
+    try {
+      const p = await paketAl();
+      if (k.salt !== p.salt) throw 0;
+      goster(await coz(b64(k.bits), p));
+    } catch {
+      try { localStorage.removeItem(ANAHTAR); } catch {}
+    }
+  })();
+
+  $('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('ac');
+    btn.disabled = true; btn.textContent = 'Açılıyor…'; $('hata').textContent = '';
+    try {
+      const p = await paketAl();
+      const bitler = await anahtarBitleri($('sifre').value, p);
+      let html;
+      try { html = await coz(bitler, p); } catch { throw new Error('Şifre yanlış'); }
+      try {
+        if ($('hatirla').checked) localStorage.setItem(ANAHTAR, JSON.stringify({ salt: p.salt, bits: toB64(bitler) }));
+      } catch {}
+      goster(html);
+    } catch (err) {
+      $('hata').textContent = err.message || 'Açılamadı';
+      btn.disabled = false; btn.textContent = 'Aç';
+    }
+  });
+})();
+</script>
+</body>
+</html>
